@@ -341,14 +341,17 @@ a.TierCard-peek {
 }
 
 .TierCard-label {
-  flex: 0 0 34px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 34px;
+  max-width: 72px;
+  padding: 0 6px;
   font-weight: 700;
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 40px;
+  text-align: center;
   overflow: hidden;
   white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .TierCard-items {

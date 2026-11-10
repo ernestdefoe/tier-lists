@@ -252,6 +252,8 @@ export default class ShowPage extends Page {
 
   actions(list: Full) {
     const signedIn = !!app.session.user;
+    // A ranking of a template is remixed by ranking the template's items too.
+    const rank = list.isTemplate || !!list.root?.isTemplate;
     return [
       <Button
         className={'Button TierListPage-like' + (list.liked ? ' is-liked' : '')}
@@ -263,8 +265,8 @@ export default class ShowPage extends Page {
       </Button>,
       list.can.remix ? (
         <Link className="Button Button--primary" href={listUrl(list.id, 'remix')}>
-          <Icon name={list.isTemplate ? 'fas fa-ranking-star' : 'fas fa-shuffle'} className="Button-icon" />
-          <span className="Button-label">{list.isTemplate ? t('show.rank_it') : t('show.remix')}</span>
+          <Icon name={rank ? 'fas fa-ranking-star' : 'fas fa-shuffle'} className="Button-icon" />
+          <span className="Button-label">{rank ? t('show.rank_it') : t('show.remix')}</span>
         </Link>
       ) : !signedIn ? (
         <Button
@@ -272,7 +274,7 @@ export default class ShowPage extends Page {
           icon="fas fa-shuffle"
           onclick={() => app.modal.show(() => import('flarum/forum/components/LogInModal'))}
         >
-          {list.isTemplate ? t('show.rank_it') : t('show.remix')}
+          {rank ? t('show.rank_it') : t('show.remix')}
         </Button>
       ) : null,
       <Button className="Button" icon="fas fa-link" onclick={() => this.share(list)}>

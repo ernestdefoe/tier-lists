@@ -211,10 +211,42 @@ export default class EditorPage extends Page {
     }
   }
 
+  oncreate(vnode: Mithril.VnodeDOM) {
+    super.oncreate(vnode);
+    this.measureDock();
+    window.addEventListener('resize', this.measureDock);
+  }
+
   onremove(vnode: Mithril.VnodeDOM) {
     super.onremove(vnode);
     this.endDrag(false);
+    window.removeEventListener('resize', this.measureDock);
   }
+
+  /**
+   * How much of the bottom of the screen a fixed bar covers (Mobile Tab, a
+   * theme's tab bar): the docked pool sits above it, and dragging scrolls
+   * before reaching it. Measured, because every bar is different.
+   */
+  dock = 0;
+
+  measureDock = () => {
+    let top = window.innerHeight;
+    for (const el of document.elementsFromPoint(window.innerWidth / 2, window.innerHeight - 2)) {
+      if (el.closest('.TierEditor')) continue;
+      for (let node: Element | null = el; node && node !== document.body; node = node.parentElement) {
+        if (getComputedStyle(node).position === 'fixed') {
+          top = Math.min(top, node.getBoundingClientRect().top);
+          break;
+        }
+      }
+    }
+    const dock = Math.max(0, Math.round(window.innerHeight - top));
+    if (dock !== this.dock) {
+      this.dock = dock;
+      document.documentElement.style.setProperty('--tier-dock-offset', dock + 'px');
+    }
+  };
 
   view() {
     const { PageStructure, IndexSidebar } = core;
@@ -762,6 +794,7 @@ export default class EditorPage extends Page {
     const drag = this.drag;
     if (!drag || drag.active) return;
     drag.active = true;
+    this.measureDock();
     this.grabbed = null;
     this.sheet = null;
 
@@ -853,7 +886,7 @@ export default class EditorPage extends Page {
       if (!drag?.active) return;
       const edge = 72;
       const top = Math.max(edge - drag.y, 0);
-      const bottom = Math.max(drag.y - (window.innerHeight - edge), 0);
+      const bottom = Math.max(drag.y - (window.innerHeight - this.dock - edge), 0);
       if (top || bottom) {
         window.scrollBy(0, (bottom - top) * 0.35);
         this.place();

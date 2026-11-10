@@ -22,6 +22,7 @@ use ErnestDefoe\TierLists\Images;
 use ErnestDefoe\TierLists\Notification\LikedBlueprint;
 use ErnestDefoe\TierLists\Notification\RemixedBlueprint;
 use ErnestDefoe\TierLists\Settings;
+use ErnestDefoe\TierLists\TierListsServiceProvider;
 use Flarum\Api\Context;
 use Flarum\Api\Resource\ForumResource;
 use Flarum\Api\Schema;
@@ -89,6 +90,9 @@ return [
         ->schedule(PruneImagesCommand::class, function (ScheduledEvent $event): void {
             $event->daily();
         }),
+
+    (new Extend\ServiceProvider())
+        ->register(TierListsServiceProvider::class),
 
     (new Extend\Conditional())
         ->whenExtensionEnabled('flarum-gdpr', fn () => [

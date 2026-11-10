@@ -2,6 +2,7 @@
 
 namespace ErnestDefoe\TierLists\Api;
 
+use ErnestDefoe\TierLists\Access;
 use ErnestDefoe\TierLists\Discussions;
 use ErnestDefoe\TierLists\TierList;
 use Flarum\Http\RequestUtil;
@@ -24,7 +25,9 @@ class DiscussionController implements RequestHandlerInterface
     public function handle(ServerRequestInterface $request): ResponseInterface
     {
         $actor = RequestUtil::getActor($request);
-        $actor->assertRegistered();
+        if (! Access::create($actor)) {
+            return Errors::make(403, 'permission_denied');
+        }
 
         $list = TierList::query()->with(['user', 'items'])->find((int) Arr::get($request->getQueryParams(), 'id'));
         if (! $list) {

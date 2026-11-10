@@ -29,8 +29,8 @@ class LikeController implements RequestHandlerInterface
     public function handle(ServerRequestInterface $request): ResponseInterface
     {
         $actor = RequestUtil::getActor($request);
-        $actor->assertRegistered();
-        if (! Access::view($actor)) {
+        // Liking is part of "make, remix and like tier lists".
+        if (! Access::view($actor) || ! Access::create($actor)) {
             return Errors::make(403, 'permission_denied');
         }
 

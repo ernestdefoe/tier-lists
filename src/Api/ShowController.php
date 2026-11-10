@@ -96,7 +96,7 @@ class ShowController implements RequestHandlerInterface
             'can' => [
                 'edit' => Access::edit($actor, $list),
                 'remix' => Access::create($actor),
-                'like' => ! $actor->isGuest(),
+                'like' => Access::create($actor),
                 'discuss' => ! $list->discussion_id && ! $list->root_id && $list->user_id === $actor->id && $this->discussions->canStart($actor),
             ],
         ];

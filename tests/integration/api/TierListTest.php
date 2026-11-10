@@ -192,4 +192,64 @@ class TierListTest extends TestCase
         // The first request also warms caches: 20 lists may cost fewer queries than 1, never more.
         $this->assertLessThanOrEqual($one, $many, "1 list: $one queries; 20 lists: $many");
     }
+
+    #[Test]
+    public function liking_needs_the_make_remix_and_like_permission()
+    {
+        // Permissions are read once per process: take it away before the first request.
+        $this->database()->table('group_permission')->where('permission', 'ernestdefoe-tier-lists.create')->delete();
+        $id = $this->call('POST', '/api/tier-lists', $this->list(), 1)[1]['data']['id'];
+
+        $this->assertSame(403, $this->call('POST', "/api/tier-lists/$id/like", null, 3)[0]);
+        $this->assertSame(403, $this->call('POST', "/api/tier-lists/$id/discussion", null, 3)[0]);
+        $this->assertFalse($this->call('GET', "/api/tier-lists/$id", null, 3)[1]['data']['can']['like']);
+    }
+
+    #[Test]
+    public function editing_a_template_ranking_keeps_the_template_items()
+    {
+        $template = $this->call('POST', '/api/tier-lists', $this->list(['isTemplate' => true]))[1]['data'];
+        $keys = array_column($template['allItems'], 'key', 'label');
+        $ranking = $this->call('POST', '/api/tier-lists', ['parentId' => $template['id'], 'title' => 'Mine', 'tiers' => self::TIERS, 'items' => []], 3)[1]['data'];
+
+        [$status, $edited] = $this->call('PATCH', '/api/tier-lists/'.$ranking['id'], [
+            'title' => 'Mine',
+            'tiers' => self::TIERS,
+            'items' => [['key' => $keys['Pepperoni'], 'label' => 'Renamed', 'tier' => 2], ['label' => 'Extra', 'tier' => 0]],
+        ], 3);
+
+        $this->assertSame(200, $status);
+        $this->assertCount(4, $edited['data']['allItems']);
+        $this->assertSame(['Pepperoni', 2], [$edited['data']['allItems'][0]['label'], $edited['data']['allItems'][0]['tier']]);
+    }
+
+    #[Test]
+    public function deleting_a_member_releases_their_pictures_and_recounts_others()
+    {
+        $original = $this->call('POST', '/api/tier-lists', $this->list())[1]['data'];
+        $keys = array_column($original['allItems'], 'key');
+
+        // Carol remixes it with a picture of her own, and likes it.
+        $images = $this->app()->getContainer()->make(\ErnestDefoe\TierLists\Images::class);
+        $path = tempnam(sys_get_temp_dir(), 'tl').'.png';
+        $im = imagecreatetruecolor(40, 40);
+        imagepng($im, $path);
+        $url = $images->store($path, 3);
+        @unlink($path);
+
+        $items = array_map(fn ($key) => ['key' => $key, 'label' => 'x', 'tier' => 0], $keys);
+        $items[] = ['label' => 'Mine', 'image' => $url, 'tier' => 1];
+        $this->assertSame(201, $this->call('POST', '/api/tier-lists', ['parentId' => $original['id'], 'title' => 'Remix', 'tiers' => self::TIERS, 'items' => $items], 3)[0]);
+        $this->call('POST', '/api/tier-lists/'.$original['id'].'/like', null, 3);
+
+        $row = TierList::find($original['id']);
+        $this->assertSame([1, 1], [$row->likes_count, $row->remixes_count]);
+        $this->assertSame(1, $this->database()->table('tier_list_images')->where('claimed', true)->count());
+
+        User::find(3)->delete();
+
+        $row = TierList::find($original['id']);
+        $this->assertSame([0, 0], [$row->likes_count, $row->remixes_count]);
+        $this->assertSame(0, $this->database()->table('tier_list_images')->count());
+    }
 }

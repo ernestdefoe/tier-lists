@@ -219,6 +219,20 @@ class Images
     }
 
     /**
+     * A safety net for pictures marked used that no item shows any more (rows
+     * removed outside the extension). A slice per run, from a cursor kept in
+     * the cache; losing the cursor only starts the sweep over.
+     */
+    public function pruneOrphans(\Illuminate\Contracts\Cache\Repository $cache, int $limit = 500): int
+    {
+        $after = (int) $cache->get('tier-lists.prune-cursor', 0);
+        $rows = $this->db->table(self::TABLE)->where('claimed', true)->where('id', '>', $after)->orderBy('id')->limit($limit)->get(['id', 'name']);
+        $cache->forever('tier-lists.prune-cursor', $rows->count() < $limit ? 0 : (int) $rows->last()->id);
+
+        return $rows->isEmpty() ? 0 : $this->prune($rows->pluck('name')->all());
+    }
+
+    /**
      * Uploads past their grace period that no list shows (an editor closed
      * without saving). Bounded per run.
      */

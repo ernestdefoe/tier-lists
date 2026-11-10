@@ -35,6 +35,8 @@ class DeleteController implements RequestHandlerInterface
 
         $pictures = $list->items->pluck('image')->filter()->values()->all();
         $root = $list->root_id;
+        // Items first: SQLite may not enforce the cascade, and the pictures are released by what's left.
+        $list->items()->delete();
         $list->delete();
 
         $this->images->release($pictures);

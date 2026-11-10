@@ -2,6 +2,7 @@
 
 namespace ErnestDefoe\TierLists\Gdpr;
 
+use ErnestDefoe\TierLists\Cleanup;
 use ErnestDefoe\TierLists\TierList;
 use Flarum\Gdpr\Data\Type;
 
@@ -43,18 +44,11 @@ class TierListData extends Type
 
     public function anonymize(): void
     {
-        TierList::query()->where('user_id', $this->user->id)->update(['user_id' => null]);
-        $this->db()->table('tier_list_likes')->where('user_id', $this->user->id)->delete();
+        resolve(Cleanup::class)->anonymizeMember((int) $this->user->id);
     }
 
     public function delete(): void
     {
-        TierList::query()->where('user_id', $this->user->id)->delete();
-        $this->db()->table('tier_list_likes')->where('user_id', $this->user->id)->delete();
-    }
-
-    private function db(): \Illuminate\Database\ConnectionInterface
-    {
-        return resolve(\Illuminate\Database\ConnectionInterface::class);
+        resolve(Cleanup::class)->deleteMember((int) $this->user->id);
     }
 }

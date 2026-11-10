@@ -103,6 +103,7 @@ ernestdefoe-tier-lists:
       sign_in: Log in to make a tier list.
       sign_in_button: Log in
       restored: We kept your unsaved list.
+      restored_expired: "{count, plural, one {A picture you added more than a day ago was removed; add it again.} other {# pictures you added more than a day ago were removed; add them again.}}"
       start_over: Start over
       template_note: This is a template. Drag every item to where you think it belongs.
       list_title: Title

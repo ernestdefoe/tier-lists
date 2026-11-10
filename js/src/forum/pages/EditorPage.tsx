@@ -40,6 +40,8 @@ interface Item {
   image: string | null;
   tier: number | null;
   uploading?: boolean;
+  /** When this editor uploaded the picture: an upload no saved list claims is deleted after a day. */
+  uploadedAt?: number;
 }
 
 interface Target {
@@ -91,6 +93,8 @@ export default class EditorPage extends Page {
   newLabel = '';
   saving = false;
   restored = false;
+  /** Pictures dropped from a restored draft because the server has deleted them. */
+  expired = 0;
   error = '';
 
   drag: Drag | null = null;
@@ -145,7 +149,8 @@ export default class EditorPage extends Page {
     this.source = list;
     this.rows = list.tiers.map((tier) => ({ uid: uid(), ...tier }));
     const template = list.isTemplate || !!list.root?.isTemplate;
-    this.locked = this.mode === 'remix' ? template : false;
+    // Ranking a template (or editing such a ranking): the items are the template's.
+    this.locked = this.mode === 'remix' ? template : !!list.root?.isTemplate;
     // Ranking a template starts from an empty board; a remix starts from the list.
     this.items = list.allItems.map((item) => ({
       uid: uid(),
@@ -181,7 +186,19 @@ export default class EditorPage extends Page {
       this.title = draft.title || '';
       this.description = draft.description || '';
       this.rows = draft.rows.map((row: Row) => ({ ...row, uid: uid() }));
-      this.items = draft.items.filter((item: Item) => this.locked || item.label || item.image).map((item: Item) => ({ ...item, uid: uid() }));
+      // Pictures uploaded for a draft are deleted by the server after a day if no
+      // list claims them: drop the ones that are that old, and say so.
+      const stale = Date.now() - 22 * 3600 * 1000;
+      let dropped = 0;
+      const items: Item[] = draft.items.map((item: Item) => {
+        if (item.image && item.uploadedAt && item.uploadedAt < stale) {
+          dropped++;
+          return { ...item, image: null, uploadedAt: undefined };
+        }
+        return item;
+      });
+      this.items = items.filter((item) => this.locked || item.label || item.image).map((item) => ({ ...item, uid: uid() }));
+      this.expired = dropped;
       this.isTemplate = !!draft.isTemplate;
       this.restored = true;
     } catch {
@@ -194,7 +211,9 @@ export default class EditorPage extends Page {
     if (this.mode === 'edit') return;
     this.draftTimer = window.setTimeout(() => {
       try {
-        const items = this.items.filter((item) => !item.uploading).map(({ key, label, image, tier }) => ({ key, label, image, tier }));
+        const items = this.items
+          .filter((item) => !item.uploading)
+          .map(({ key, label, image, tier, uploadedAt }) => ({ key, label, image, tier, uploadedAt }));
         window.localStorage.setItem(
           this.draftKey(),
           JSON.stringify({ title: this.title, description: this.description, rows: this.rows, items, isTemplate: this.isTemplate })
@@ -361,6 +380,7 @@ export default class EditorPage extends Page {
         {this.restored ? (
           <div className="TierEditor-restored">
             <Icon name="fas fa-clock-rotate-left" /> {t('editor.restored')}{' '}
+            {this.expired ? t('editor.restored_expired', { count: this.expired }) : null}{' '}
             <Button className="Button Button--link" onclick={() => this.startOver()}>
               {t('editor.start_over')}
             </Button>
@@ -1194,6 +1214,7 @@ export default class EditorPage extends Page {
         .then((url) => {
           job.item.image = url;
           job.item.uploading = false;
+          job.item.uploadedAt = Date.now();
         })
         .catch(() => {
           this.items = this.items.filter((other) => other !== job.item);

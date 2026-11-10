@@ -11,9 +11,12 @@ import { api, listUrl, t, tt, type Card } from './api';
  * 🚨 Every embed on the page is fetched in ONE request (ids are queued for a
  * tick, then sent together), never one request per post.
  *
- * 🚨 The post body is Mithril's trusted HTML: its top-level nodes must stay
- * where Mithril put them, or the next re-render throws. The board is mounted
- * INSIDE the link's paragraph, which keeps its place; the link is hidden.
+ * 🚨 The post body is Mithril's trusted HTML: Mithril removes and replaces
+ * the nodes it inserted, so nothing of ours may stand in for one of them. The
+ * board is mounted in a new element right after the link (inside its
+ * paragraph, or at the top level when the post is the link alone), the link is
+ * hidden, and a board whose link Mithril has since replaced (an edited post) is
+ * unmounted on the next pass.
  */
 
 declare const m: Mithril.Static;
@@ -68,20 +71,29 @@ function linkedId(anchor: HTMLAnchorElement): number | null {
 export function upgradeLinks(root: HTMLElement | null) {
   if (!root || !app.forum.attribute('tierListsCanView')) return;
 
+  // Boards whose link is gone (the post was edited and re-rendered).
+  root.querySelectorAll<HTMLElement>('.TierEmbed-mount').forEach((mount) => {
+    const anchor = mount.previousElementSibling as HTMLElement | null;
+    if (!anchor || !anchor.dataset.tierEmbed) {
+      m.mount(mount, null);
+      mount.remove();
+    }
+  });
+
   root.querySelectorAll<HTMLAnchorElement>('.Post-body a[href*="/tierlists/"]').forEach((anchor) => {
+    if (anchor.dataset.tierEmbed) return;
     const host = anchor.parentElement;
-    if (!host || host.dataset.tierEmbed || !['P', 'DIV'].includes(host.tagName)) return;
-    // Alone on its line: the paragraph holds the link and nothing but the link.
+    if (!host || !['P', 'DIV'].includes(host.tagName)) return;
+    // Alone on its line: its paragraph (or the whole post) holds the link and nothing else.
     if ((host.textContent || '').trim() !== (anchor.textContent || '').trim() || host.querySelectorAll('a').length !== 1) return;
 
     const id = linkedId(anchor);
     if (!id) return;
 
-    host.dataset.tierEmbed = String(id);
-    host.classList.add('TierEmbed-host');
+    anchor.dataset.tierEmbed = String(id);
     const mount = document.createElement('div');
     mount.className = 'TierEmbed-mount';
-    host.appendChild(mount);
+    anchor.after(mount);
 
     fetchCard(id).then((card) => {
       if (!card || !mount.isConnected) return;

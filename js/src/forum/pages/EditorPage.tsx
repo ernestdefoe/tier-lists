@@ -61,6 +61,8 @@ interface Drag {
   dx: number;
   dy: number;
   target: Target | null;
+  armTop?: boolean;
+  armBottom?: boolean;
 }
 
 const PALETTE = ['#ff7f7f', '#ffbf7f', '#ffdf7f', '#ffff7f', '#bfff7f', '#7fffbf', '#7fbfff', '#bf7fff', '#ff7fdf', '#c0c0c0'];
@@ -215,12 +217,24 @@ export default class EditorPage extends Page {
     super.oncreate(vnode);
     this.measureDock();
     window.addEventListener('resize', this.measureDock);
+    window.addEventListener('scroll', this.onScroll, { passive: true });
+    // 🚨 Registered up front, not when a drag starts: WebKit decides whether a
+    // touch may scroll from the listeners present when it begins.
+    vnode.dom.addEventListener('touchmove', this.onTouchMove, { passive: false });
+  }
+
+  onupdate(vnode: Mithril.VnodeDOM) {
+    super.onupdate(vnode);
+    this.onScroll();
   }
 
   onremove(vnode: Mithril.VnodeDOM) {
     super.onremove(vnode);
     this.endDrag(false);
     window.removeEventListener('resize', this.measureDock);
+    window.removeEventListener('scroll', this.onScroll);
+    cancelAnimationFrame(this.dockFrame);
+    vnode.dom.removeEventListener('touchmove', this.onTouchMove);
   }
 
   /**
@@ -229,6 +243,19 @@ export default class EditorPage extends Page {
    * before reaching it. Measured, because every bar is different.
    */
   dock = 0;
+
+  ceiling = 0;
+
+  /** A fixed element (not ours) covering the middle of the screen at this height. */
+  fixedAt(y: number): Element | null {
+    for (const el of document.elementsFromPoint(window.innerWidth / 2, y)) {
+      if (el.closest('.TierEditor')) continue;
+      for (let node: Element | null = el; node && node !== document.body; node = node.parentElement) {
+        if (getComputedStyle(node).position === 'fixed') return node;
+      }
+    }
+    return null;
+  }
 
   measureDock = () => {
     let top = window.innerHeight;
@@ -241,12 +268,59 @@ export default class EditorPage extends Page {
         }
       }
     }
+    // And the fixed bars across the top (the header, a score ticker): stacked, so walk down them.
+    let ceiling = 0;
+    for (let i = 0; i < 4; i++) {
+      const fixed = this.fixedAt(ceiling + 2);
+      if (!fixed) break;
+      ceiling = Math.max(ceiling + 3, fixed.getBoundingClientRect().bottom);
+    }
+    this.ceiling = Math.round(ceiling);
+
     const dock = Math.max(0, Math.round(window.innerHeight - top));
     if (dock !== this.dock) {
       this.dock = dock;
       document.documentElement.style.setProperty('--tier-dock-offset', dock + 'px');
     }
+    this.checkDock();
   };
+
+  /**
+   * On a phone, while the pool's own place is below the screen, the pool is
+   * docked to the bottom (fixed) so items can be dragged up into the rows.
+   * 🚨 Not `position: sticky`: on iOS the forum's body is its own scroll box
+   * (overflow-x: hidden), and sticky never docks there.
+   */
+  docked = false;
+  slotHeight = 0;
+  private dockFrame = 0;
+
+  onScroll = () => {
+    cancelAnimationFrame(this.dockFrame);
+    this.dockFrame = requestAnimationFrame(() => this.checkDock());
+  };
+
+  checkDock() {
+    const slot = document.querySelector<HTMLElement>('.TierEditor-poolSlot');
+    const pool = slot?.firstElementChild as HTMLElement | null;
+    if (!slot || !pool) return;
+
+    const floor = window.innerHeight - this.dock;
+    const natural = this.docked ? this.slotHeight : pool.offsetHeight;
+    const want =
+      window.matchMedia('(max-width: 767px)').matches &&
+      this.items.some((item) => item.tier === null) &&
+      slot.getBoundingClientRect().top > floor - Math.min(natural, window.innerHeight * 0.4);
+
+    if (want !== this.docked) {
+      if (want) this.slotHeight = pool.offsetHeight;
+      this.docked = want;
+      m.redraw();
+    }
+    const rect = slot.getBoundingClientRect();
+    pool.style.left = want ? rect.left + 'px' : '';
+    pool.style.width = want ? rect.width + 'px' : '';
+  }
 
   view() {
     const { PageStructure, IndexSidebar } = core;
@@ -351,7 +425,9 @@ export default class EditorPage extends Page {
           ) : null}
         </div>
 
-        {this.pool()}
+        <div className="TierEditor-poolSlot" style={this.docked ? { minHeight: this.slotHeight + 'px' } : undefined}>
+          {this.pool()}
+        </div>
 
         {this.options()}
 
@@ -442,7 +518,7 @@ export default class EditorPage extends Page {
     const items = this.items.filter((item) => item.tier === null);
     return (
       <section
-        className={'TierEditor-pool' + (items.length ? '' : ' is-empty')}
+        className={'TierEditor-pool' + (items.length ? '' : ' is-empty') + (this.docked ? ' is-docked' : '')}
         data-zone="pool"
         ondragover={(e: DragEvent) => {
           if (!this.locked && e.dataTransfer?.types.includes('Files')) e.preventDefault();
@@ -460,7 +536,8 @@ export default class EditorPage extends Page {
           {this.tiles(items, null)}
           {!items.length ? <p className="TierEditor-poolEmpty">{this.items.length ? t('editor.pool_done') : t('editor.pool_empty')}</p> : null}
         </div>
-        {this.locked ? null : this.adder()}
+        {/* Docked, the pool is just the items: adding happens where it lives. */}
+        {this.locked || this.docked ? null : this.adder()}
       </section>
     );
   }
@@ -787,7 +864,6 @@ export default class EditorPage extends Page {
     window.addEventListener('pointermove', this.onMove, { passive: false });
     window.addEventListener('pointerup', this.onUp);
     window.addEventListener('pointercancel', this.onCancel);
-    document.addEventListener('touchmove', this.onTouchMove, { passive: false });
   }
 
   activate(el: HTMLElement) {
@@ -878,15 +954,26 @@ export default class EditorPage extends Page {
     return { tier, before: null };
   }
 
-  /** Scroll the page when the pointer is near the top or bottom while dragging. */
+  /**
+   * Scroll the page when the pointer is near the top or the bottom of the
+   * board while dragging. On a phone the bottom is the top of the docked
+   * pool, not the screen, and the top is below the fixed header bars.
+   */
   loop() {
     cancelAnimationFrame(this.frame);
     const step = () => {
       const drag = this.drag;
       if (!drag?.active) return;
       const edge = 72;
-      const top = Math.max(edge - drag.y, 0);
-      const bottom = Math.max(drag.y - (window.innerHeight - this.dock - edge), 0);
+      const pool = document.querySelector('.TierEditor-pool');
+      const floor = this.docked && pool ? pool.getBoundingClientRect().top : window.innerHeight - this.dock;
+      const roof = this.ceiling;
+      // An edge scrolls only once the pointer has been outside it: picking an
+      // item up near the bottom and moving it up must not scroll down.
+      if (drag.y > roof + edge) drag.armTop = true;
+      if (drag.y < floor - edge) drag.armBottom = true;
+      const top = drag.armTop ? Math.max(roof + edge - drag.y, 0) : 0;
+      const bottom = drag.armBottom && drag.y < floor ? Math.max(drag.y - (floor - edge), 0) : 0;
       if (top || bottom) {
         window.scrollBy(0, (bottom - top) * 0.35);
         this.place();
@@ -904,7 +991,6 @@ export default class EditorPage extends Page {
     window.removeEventListener('pointermove', this.onMove);
     window.removeEventListener('pointerup', this.onUp);
     window.removeEventListener('pointercancel', this.onCancel);
-    document.removeEventListener('touchmove', this.onTouchMove);
     drag.ghost?.remove();
     this.drag = null;
 

@@ -993,7 +993,6 @@ a.TierCard-peek {
   margin: 16px 0 24px;
 }
 
-// On a phone, the items still to rank stay at the bottom of the screen while you work.
 @media @phone {
   .TierEditor-rowEdit {
     flex-basis: 128px;
@@ -1001,19 +1000,31 @@ a.TierCard-peek {
   .TierEditor-row .TierEditor-drop {
     min-height: @tier-tile-phone + 6px;
   }
-  .TierEditor-pool:not(.is-empty) {
-    position: sticky;
-    // Above a fixed bottom bar (Mobile Tab, a theme's), measured by the editor.
-    bottom: var(--tier-dock-offset, 0px);
-    z-index: 3;
-    max-height: 40vh;
-    max-height: calc(40svh - var(--tier-dock-offset, 0px) / 2);
-    overflow-y: auto;
-    box-shadow: 0 -6px 16px var(--shadow-color);
-    padding-bottom: calc(10px + env(safe-area-inset-bottom));
-  }
   .TierEditor-poolItems {
     min-height: @tier-tile-phone;
+  }
+}
+
+.TierEditor-pool.is-docked {
+  position: fixed;
+  // Above a fixed bottom bar (Mobile Tab, a theme's), measured by the editor.
+  bottom: var(--tier-dock-offset, 0px);
+  z-index: 3;
+  margin: 0;
+  max-height: 40vh;
+  max-height: 40svh;
+  overflow-y: auto;
+  border-style: solid;
+  border-radius: calc(var(--border-radius) * 2) calc(var(--border-radius) * 2) 0 0;
+  box-shadow: 0 -6px 16px var(--shadow-color);
+  padding-bottom: calc(10px + env(safe-area-inset-bottom));
+}
+
+.TierEditor-poolSlot {
+  margin-top: 12px;
+
+  > .TierEditor-pool {
+    margin-top: 0;
   }
 }
 

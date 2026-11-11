@@ -317,11 +317,11 @@ class TierListTest extends TestCase
     }
 
     #[Test]
-    public function fof_upload_pictures_go_with_the_list_unless_a_post_uses_them()
+    public function tracked_fof_upload_pictures_go_with_the_list_unless_a_post_uses_them()
     {
         $this->extension('fof-upload', 'ernestdefoe-tier-lists');
         $files = [];
-        foreach (['a', 'b'] as $n) {
+        foreach (['a', 'b', 'c'] as $n) {
             $files[$n] = 'https://localhost/assets/files/2026-11-11/'.$n.'.png';
             $this->database()->table('fof_upload_files')->insert([
                 'actor_id' => 2, 'base_name' => "$n.png", 'path' => "2026-11-11/$n.png", 'url' => $files[$n], 'type' => 'image/png',
@@ -333,17 +333,20 @@ class TierListTest extends TestCase
         $this->database()->table('posts')->insert(['id' => 1, 'discussion_id' => 1, 'number' => 1, 'user_id' => 2, 'type' => 'comment', 'content' => '<t>b</t>', 'created_at' => Carbon::now()]);
         $this->database()->table('fof_upload_file_posts')->insert(['file_id' => $this->database()->table('fof_upload_files')->where('uuid', 'uuid-b')->value('id'), 'post_id' => 1]);
 
-        // The editor tracks what it uploads to FoF Upload.
+        // The editor tracks what it uploads to FoF Upload ("b" too). "c" was never
+        // tracked (uploaded before tracking, maybe used in a bio or a page): it stays.
         $this->assertTrue($this->call('POST', '/api/tier-lists/images/track', ['url' => $files['a']])[1]['tracked']);
+        $this->assertTrue($this->call('POST', '/api/tier-lists/images/track', ['url' => $files['b']])[1]['tracked']);
 
         $id = $this->call('POST', '/api/tier-lists', $this->list(['items' => [
             ['label' => 'A', 'image' => $files['a'], 'tier' => 0],
             ['label' => 'B', 'image' => $files['b'], 'tier' => 1],
+            ['label' => 'C', 'image' => $files['c'], 'tier' => 2],
         ]]))[1]['data']['id'];
 
         $this->assertSame(204, $this->call('DELETE', "/api/tier-lists/$id")[0]);
 
-        $this->assertSame(['uuid-b'], $this->database()->table('fof_upload_files')->pluck('uuid')->all());
+        $this->assertSame(['uuid-b', 'uuid-c'], $this->database()->table('fof_upload_files')->orderBy('uuid')->pluck('uuid')->all());
         $this->assertSame(0, $this->database()->table('tier_list_images')->count());
     }
 }

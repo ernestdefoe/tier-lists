@@ -202,12 +202,11 @@ class Images
     /**
      * Delete each of these pictures that no item shows any more. Ours by file
      * name (a forum that moved keeps the old address in its rows); FoF Upload's
-     * by URL. A FoF Upload picture that was never tracked (uploaded before
-     * tracking existed) is adopted when its uploader is the list's owner.
+     * by URL, and only the ones the editor tracked when it uploaded them.
      *
      * @param list<string> $urls image URLs that just stopped being shown somewhere
      */
-    public function release(array $urls, ?int $ownerId = null): int
+    public function release(array $urls): int
     {
         $names = [];
         $others = [];
@@ -224,14 +223,8 @@ class Images
             foreach ($tracked as $name) {
                 $names[] = $name;
             }
-            $untracked = array_values(array_diff($others, array_keys($tracked)));
-            if ($untracked && $ownerId) {
-                foreach ($untracked as $url) {
-                    if ($this->track($url, $ownerId)) {
-                        $names[] = (string) $this->db->table(self::TABLE)->where('url', $url)->value('name');
-                    }
-                }
-            }
+            // A FoF Upload file the editor did not track is left alone: it may be
+            // used where FoF records nothing (a bio, a page, a setting).
         }
 
         return $names ? $this->prune($names) : 0;

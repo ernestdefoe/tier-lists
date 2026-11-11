@@ -144,7 +144,7 @@ class SaveController implements RequestHandlerInterface
         $after = array_values(array_filter(array_column($items, 'image')));
         $this->images->claim($after);
         if ($gone = array_values(array_diff($before, $after))) {
-            $this->images->release($gone, $list->user_id);
+            $this->images->release($gone);
         }
 
         if ($wasNew && $root) {

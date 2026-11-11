@@ -65,6 +65,8 @@ interface Drag {
   target: Target | null;
   armTop?: boolean;
   armBottom?: boolean;
+  topSince?: number;
+  bottomSince?: number;
 }
 
 const PALETTE = ['#ff7f7f', '#ffbf7f', '#ffdf7f', '#ffff7f', '#bfff7f', '#7fffbf', '#7fbfff', '#bf7fff', '#ff7fdf', '#c0c0c0'];
@@ -240,6 +242,8 @@ export default class EditorPage extends Page {
     // 🚨 Registered up front, not when a drag starts: WebKit decides whether a
     // touch may scroll from the listeners present when it begins.
     vnode.dom.addEventListener('touchmove', this.onTouchMove, { passive: false });
+    vnode.dom.addEventListener('focusin', this.onScroll);
+    vnode.dom.addEventListener('focusout', this.onScroll);
   }
 
   onupdate(vnode: Mithril.VnodeDOM) {
@@ -254,6 +258,8 @@ export default class EditorPage extends Page {
     window.removeEventListener('scroll', this.onScroll);
     cancelAnimationFrame(this.dockFrame);
     vnode.dom.removeEventListener('touchmove', this.onTouchMove);
+    vnode.dom.removeEventListener('focusin', this.onScroll);
+    vnode.dom.removeEventListener('focusout', this.onScroll);
   }
 
   /**
@@ -326,7 +332,10 @@ export default class EditorPage extends Page {
 
     const floor = window.innerHeight - this.dock;
     const natural = this.docked ? this.slotHeight : pool.offsetHeight;
+    // Never while the member is typing items in: docking hides the form under their fingers.
+    const typing = !!document.activeElement?.closest('.TierEditor-add');
     const want =
+      !typing &&
       window.matchMedia('(max-width: 767px)').matches &&
       this.items.some((item) => item.tier === null) &&
       slot.getBoundingClientRect().top > floor - Math.min(natural, window.innerHeight * 0.4);
@@ -988,12 +997,20 @@ export default class EditorPage extends Page {
       const pool = document.querySelector('.TierEditor-pool');
       const floor = this.docked && pool ? pool.getBoundingClientRect().top : window.innerHeight - this.dock;
       const roof = this.ceiling;
-      // An edge scrolls only once the pointer has been outside it: picking an
-      // item up near the bottom and moving it up must not scroll down.
-      if (drag.y > roof + edge) drag.armTop = true;
+      // An edge scrolls once the pointer has been outside it, or has rested in
+      // it a moment: picking up an item near the bottom and moving it up must
+      // not scroll down, but holding just above the docked pool must, to reach
+      // the rows behind it.
+      const now = performance.now();
+      const inTop = drag.y < roof + edge;
+      const inBottom = drag.y >= floor - edge && drag.y < floor;
+      if (!inTop) drag.armTop = true;
       if (drag.y < floor - edge) drag.armBottom = true;
-      const top = drag.armTop ? Math.max(roof + edge - drag.y, 0) : 0;
-      const bottom = drag.armBottom && drag.y < floor ? Math.max(drag.y - (floor - edge), 0) : 0;
+      drag.topSince = inTop ? (drag.topSince ?? now) : undefined;
+      drag.bottomSince = inBottom ? (drag.bottomSince ?? now) : undefined;
+      const rested = (since?: number) => since !== undefined && now - since > 300;
+      const top = drag.armTop || rested(drag.topSince) ? Math.max(roof + edge - drag.y, 0) : 0;
+      const bottom = inBottom && (drag.armBottom || rested(drag.bottomSince)) ? Math.max(drag.y - (floor - edge), 0) : 0;
       if (top || bottom) {
         window.scrollBy(0, (bottom - top) * 0.35);
         this.place();

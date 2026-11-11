@@ -15,6 +15,17 @@ export default [
   new Extend.Admin()
     .setting(() => ({ setting: setting('nav'), type: 'boolean', label: t('settings.nav') }), 100)
     .setting(
+      () => ({
+        setting: setting('max_items'),
+        type: 'number',
+        min: 10,
+        max: 500,
+        label: t('settings.max_items'),
+        help: t('settings.max_items_help'),
+      }),
+      95
+    )
+    .setting(
       () =>
         'flarum-tags' in ((globalThis as any).flarum?.extensions || {})
           ? { setting: setting('tag'), type: 'select', options: tagOptions(), default: '', label: t('settings.tag'), help: t('settings.tag_help') }

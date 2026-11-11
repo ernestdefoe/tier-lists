@@ -7,6 +7,7 @@ use Flarum\Group\Group;
 use Flarum\Testing\integration\RetrievesAuthorizedUsers;
 use Flarum\Testing\integration\TestCase;
 use Flarum\User\User;
+use Carbon\Carbon;
 use PHPUnit\Framework\Attributes\Test;
 
 class TierListTest extends TestCase
@@ -250,6 +251,99 @@ class TierListTest extends TestCase
 
         $row = TierList::find($original['id']);
         $this->assertSame([0, 0], [$row->likes_count, $row->remixes_count]);
+        $this->assertSame(0, $this->database()->table('tier_list_images')->count());
+    }
+
+    /** A picture on the extension's own disk, uploaded by this member. */
+    private function picture(int $userId): string
+    {
+        $path = tempnam(sys_get_temp_dir(), 'tl').'.png';
+        imagepng(imagecreatetruecolor(40, 40), $path);
+        $url = $this->app()->getContainer()->make(\ErnestDefoe\TierLists\Images::class)->store($path, $userId);
+        @unlink($path);
+
+        return $url;
+    }
+
+    #[Test]
+    public function the_item_cap_is_an_admin_setting()
+    {
+        $this->setting('ernestdefoe-tier-lists.max_items', 3);
+        [$status, $body] = $this->call('POST', '/api/tier-lists', $this->list());
+        $this->assertSame(422, $status);
+        $this->assertSame('tier_lists_too_many_items', $body['errors'][0]['code']);
+    }
+
+    #[Test]
+    public function a_list_holds_160_items_by_default()
+    {
+        $items = [];
+        for ($i = 1; $i <= 160; $i++) {
+            $items[] = ['label' => "Pokémon $i", 'tier' => $i % 7 === 0 ? null : $i % 3];
+        }
+        [$status, $body] = $this->call('POST', '/api/tier-lists', $this->list(['items' => $items]));
+        $this->assertSame(201, $status);
+        $this->assertCount(160, $body['data']['allItems']);
+    }
+
+    #[Test]
+    public function removing_an_item_or_deleting_the_list_deletes_its_picture()
+    {
+        $one = $this->picture(2);
+        $two = $this->picture(2);
+        $items = [['label' => 'One', 'image' => $one, 'tier' => 0], ['label' => 'Two', 'image' => $two, 'tier' => 1]];
+        $id = $this->call('POST', '/api/tier-lists', $this->list(['items' => $items]))[1]['data']['id'];
+        $this->assertSame(2, $this->database()->table('tier_list_images')->where('claimed', true)->count());
+
+        // The edit drops "Two": its picture goes.
+        $this->assertSame(200, $this->call('PATCH', "/api/tier-lists/$id", $this->list(['items' => [$items[0]]]))[0]);
+        $this->assertSame(1, $this->database()->table('tier_list_images')->count());
+
+        // Deleting the list takes the rest.
+        $this->assertSame(204, $this->call('DELETE', "/api/tier-lists/$id")[0]);
+        $this->assertSame(0, $this->database()->table('tier_list_images')->count());
+    }
+
+    #[Test]
+    public function a_picture_removed_in_the_editor_is_deleted_only_for_its_uploader()
+    {
+        $url = $this->picture(2);
+
+        $this->assertSame(204, $this->call('DELETE', '/api/tier-lists/images', ['url' => $url], 3)[0]);
+        $this->assertSame(1, $this->database()->table('tier_list_images')->count(), 'not her upload');
+
+        $this->assertSame(204, $this->call('DELETE', '/api/tier-lists/images', ['url' => $url], 2)[0]);
+        $this->assertSame(0, $this->database()->table('tier_list_images')->count());
+    }
+
+    #[Test]
+    public function fof_upload_pictures_go_with_the_list_unless_a_post_uses_them()
+    {
+        $this->extension('fof-upload', 'ernestdefoe-tier-lists');
+        $files = [];
+        foreach (['a', 'b'] as $n) {
+            $files[$n] = 'https://localhost/assets/files/2026-11-11/'.$n.'.png';
+            $this->database()->table('fof_upload_files')->insert([
+                'actor_id' => 2, 'base_name' => "$n.png", 'path' => "2026-11-11/$n.png", 'url' => $files[$n], 'type' => 'image/png',
+                'size' => 10, 'upload_method' => 'local', 'uuid' => "uuid-$n", 'created_at' => Carbon::now(),
+            ]);
+        }
+        // "b" is also in a post.
+        $this->database()->table('discussions')->insert(['id' => 1, 'title' => 'Pictures', 'slug' => 'pictures', 'comment_count' => 1, 'participant_count' => 1, 'user_id' => 2, 'created_at' => Carbon::now()]);
+        $this->database()->table('posts')->insert(['id' => 1, 'discussion_id' => 1, 'number' => 1, 'user_id' => 2, 'type' => 'comment', 'content' => '<t>b</t>', 'created_at' => Carbon::now()]);
+        $this->database()->table('fof_upload_file_posts')->insert(['file_id' => $this->database()->table('fof_upload_files')->where('uuid', 'uuid-b')->value('id'), 'post_id' => 1]);
+
+        // The editor tracks what it uploads to FoF Upload.
+        $this->assertTrue($this->call('POST', '/api/tier-lists/images/track', ['url' => $files['a']])[1]['tracked']);
+
+        $id = $this->call('POST', '/api/tier-lists', $this->list(['items' => [
+            ['label' => 'A', 'image' => $files['a'], 'tier' => 0],
+            ['label' => 'B', 'image' => $files['b'], 'tier' => 1],
+        ]]))[1]['data']['id'];
+
+        $this->assertSame(204, $this->call('DELETE', "/api/tier-lists/$id")[0]);
+
+        $this->assertSame(['uuid-b'], $this->database()->table('fof_upload_files')->pluck('uuid')->all());
         $this->assertSame(0, $this->database()->table('tier_list_images')->count());
     }
 }

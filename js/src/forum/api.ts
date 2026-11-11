@@ -96,8 +96,11 @@ export function errorText(error: any): string {
     'tier_lists_no_discussion',
     'tier_lists_has_discussion',
   ];
-  return code && known.includes(code) ? tt(`errors.${code.replace('tier_lists_', '')}`) : tt('errors.generic');
+  return code && known.includes(code) ? tt(`errors.${code.replace('tier_lists_', '')}`, { max: maxItems() }) : tt('errors.generic');
 }
+
+/** The most items a list may hold (an admin setting). */
+export const maxItems = () => app.forum.attribute<number>('tierListsMaxItems') || 200;
 
 /** The default rows, for a new list. */
 export const DEFAULT_TIERS: Tier[] = [

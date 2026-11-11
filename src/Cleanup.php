@@ -34,7 +34,7 @@ class Cleanup
         }
         $this->db->table('tier_list_likes')->where('user_id', $userId)->delete();
 
-        $this->images->release($pictures);
+        $this->images->release($pictures, $userId);
         $this->recount(array_diff($roots, $ids), array_diff($liked, $ids));
     }
 

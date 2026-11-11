@@ -6,7 +6,7 @@ import LoadingIndicator from 'flarum/common/components/LoadingIndicator';
 import Icon from 'flarum/common/components/Icon';
 import Switch from 'flarum/common/components/Switch';
 import type Mithril from 'mithril';
-import { api, core, DEFAULT_TIERS, errorText, ink, listUrl, quiet, t, tt, type Full } from '../api';
+import { api, core, DEFAULT_TIERS, errorText, ink, listUrl, maxItems, quiet, t, tt, type Full } from '../api';
 
 /**
  * Make, edit or remix a list.
@@ -563,7 +563,7 @@ export default class EditorPage extends Page {
   }
 
   adder() {
-    const full = this.items.length >= 120;
+    const full = this.items.length >= maxItems();
     return (
       <form
         className="TierEditor-add"
@@ -604,7 +604,7 @@ export default class EditorPage extends Page {
             }}
           />
         </label>
-        <p className="TierEditor-addHelp">{full ? t('editor.full') : t('editor.add_help')}</p>
+        <p className="TierEditor-addHelp">{full ? t('editor.full', { max: maxItems() }) : t('editor.add_help')}</p>
       </form>
     );
   }
@@ -1157,7 +1157,7 @@ export default class EditorPage extends Page {
       .map((line) => line.trim().slice(0, 80))
       .filter(Boolean);
     for (const label of labels) {
-      if (this.items.length >= 120) break;
+      if (this.items.length >= maxItems()) break;
       this.items.push({ uid: uid(), label, image: null, tier: null });
     }
     this.newLabel = '';
@@ -1181,14 +1181,18 @@ export default class EditorPage extends Page {
 
   remove(item: Item) {
     this.items = this.items.filter((other) => other !== item);
+    // A picture uploaded here and never saved on a list goes now, not in a day.
+    if (item.image && item.uploadedAt && !this.items.some((other) => other.image === item.image)) {
+      app.request({ method: 'DELETE', url: api('/images'), body: { url: item.image }, ...quiet }).catch(() => {});
+    }
     this.announce(tt('editor.removed', { label: item.label || tt('editor.picture') }));
     this.saveDraft();
   }
 
   upload(files: File[]) {
-    const room = 120 - this.items.length;
+    const room = maxItems() - this.items.length;
     const queue = files.filter((file) => /^image\/(jpeg|png|webp)$/.test(file.type)).slice(0, Math.max(0, room));
-    if (queue.length < files.length) app.alerts.show({ type: 'error' }, t('editor.some_skipped'));
+    if (queue.length < files.length) app.alerts.show({ type: 'error' }, t('editor.some_skipped', { max: maxItems() }));
 
     const pending = queue.map((file) => {
       const item: Item = {
@@ -1295,7 +1299,11 @@ function send(file: File): Promise<string> {
       .then((res) => {
         const url = res?.data?.[0]?.attributes?.url;
         if (!url) throw new Error('No URL');
-        return url;
+        // Tracked so it's deleted with the item or list that shows it.
+        return app.request({ method: 'POST', url: api('/images/track'), body: { url }, ...quiet }).then(
+          () => url,
+          () => url
+        );
       });
   }
   body.append('image', file);

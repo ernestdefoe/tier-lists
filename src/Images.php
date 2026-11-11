@@ -6,7 +6,9 @@ use Carbon\Carbon;
 use Flarum\Extension\ExtensionManager;
 use Flarum\Filesystem\FilesystemManager;
 use Flarum\Foundation\Paths;
+use Flarum\Group\Group;
 use Flarum\Http\UrlGenerator;
+use Flarum\User\User;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Contracts\Filesystem\Cloud;
 use Illuminate\Contracts\Filesystem\Factory;
@@ -38,6 +40,9 @@ class Images
     private const MAX_SIDE = 480;
 
     private const NAME = '/^[0-9a-f]{32}\.webp$/D';
+
+    /** The name prefix of a tracked FoF Upload picture. */
+    public const FOF = 'fof:';
 
     /** An upload gets this long to end up on a saved list. */
     public const GRACE_HOURS = 24;
@@ -158,7 +163,27 @@ class Images
     }
 
     /**
-     * A saved list now shows these pictures (any URL; only ours are recorded).
+     * A picture this member just uploaded to FoF Upload for a list: tracked
+     * like one of ours, so it is deleted when no list shows it.
+     */
+    public function track(string $url, int $userId): bool
+    {
+        if (! $this->fofEnabled()) {
+            return false;
+        }
+
+        $file = $this->db->table('fof_upload_files')->where('url', $url)->where('actor_id', $userId)->where('type', 'like', 'image/%')->first(['uuid']);
+        if (! $file) {
+            return false;
+        }
+
+        $this->db->table(self::TABLE)->insertOrIgnore(['name' => self::FOF.$file->uuid, 'url' => $url, 'user_id' => $userId, 'claimed' => false, 'created_at' => Carbon::now()]);
+
+        return true;
+    }
+
+    /**
+     * A saved list now shows these pictures.
      *
      * @param list<string> $urls
      */
@@ -169,32 +194,79 @@ class Images
         if ($names) {
             $this->db->table(self::TABLE)->whereIn('name', $names)->where('claimed', false)->update(['claimed' => true]);
         }
+        if ($urls) {
+            $this->db->table(self::TABLE)->whereIn('url', $urls)->where('claimed', false)->update(['claimed' => true]);
+        }
     }
 
     /**
-     * Delete each of these pictures that no item shows any more. By file name,
-     * never full URL: a forum that moved keeps the old address in its rows.
+     * Delete each of these pictures that no item shows any more. Ours by file
+     * name (a forum that moved keeps the old address in its rows); FoF Upload's
+     * by URL. A FoF Upload picture that was never tracked (uploaded before
+     * tracking existed) is adopted when its uploader is the list's owner.
      *
      * @param list<string> $urls image URLs that just stopped being shown somewhere
      */
-    public function release(array $urls): int
+    public function release(array $urls, ?int $ownerId = null): int
     {
         $names = [];
-        foreach ($urls as $url) {
+        $others = [];
+        foreach (array_unique($urls) as $url) {
             if (($name = $this->nameOf($url)) !== null) {
                 $names[] = $name;
+            } else {
+                $others[] = $url;
+            }
+        }
+
+        if ($others) {
+            $tracked = $this->db->table(self::TABLE)->whereIn('url', $others)->pluck('name', 'url')->all();
+            foreach ($tracked as $name) {
+                $names[] = $name;
+            }
+            $untracked = array_values(array_diff($others, array_keys($tracked)));
+            if ($untracked && $ownerId) {
+                foreach ($untracked as $url) {
+                    if ($this->track($url, $ownerId)) {
+                        $names[] = (string) $this->db->table(self::TABLE)->where('url', $url)->value('name');
+                    }
+                }
             }
         }
 
         return $names ? $this->prune($names) : 0;
     }
 
+    /**
+     * The member removed a picture in the editor before saving: delete it now,
+     * if it is their own upload that no list has shown yet.
+     */
+    public function forget(string $url, int $userId): int
+    {
+        $name = $this->nameOf($url);
+        $row = $this->db->table(self::TABLE)
+            ->where(fn ($q) => $name ? $q->where('name', $name) : $q->where('url', $url))
+            ->where('user_id', $userId)->where('claimed', false)->first(['name']);
+
+        return $row ? $this->prune([(string) $row->name]) : 0;
+    }
+
     /** @param list<string> $names */
     public function prune(array $names): int
     {
+        $names = array_values(array_unique($names));
+        $fof = array_values(array_filter($names, fn (string $name) => str_starts_with($name, self::FOF)));
+        $local = array_values(array_diff($names, $fof));
+
+        return $this->pruneLocal($local) + ($fof ? $this->pruneFof($fof) : 0);
+    }
+
+    /** @param list<string> $names */
+    private function pruneLocal(array $names): int
+    {
         $deleted = 0;
 
-        foreach (array_chunk(array_values(array_unique($names)), 100) as $batch) {
+        foreach (array_chunk($names, 100) as $batch) {
             $used = [];
             $rows = $this->db->table('tier_list_items')
                 ->where(function ($query) use ($batch) {
@@ -219,14 +291,72 @@ class Images
     }
 
     /**
-     * A safety net for pictures marked used that no item shows any more (rows
-     * removed outside the extension). A slice per run, from a cursor kept in
-     * the cache; losing the cursor only starts the sweep over.
+     * FoF Upload pictures no list shows: deleted through FoF Upload itself, so
+     * its storage driver and media manager stay right. A file a post uses, or
+     * one in the shared library, is left alone and only stops being tracked.
+     *
+     * @param list<string> $names
+     */
+    private function pruneFof(array $names): int
+    {
+        if (! $this->fofEnabled() || ! class_exists(\FoF\Upload\File::class)) {
+            return 0;
+        }
+
+        $deleted = 0;
+        foreach (array_chunk($names, 100) as $batch) {
+            $urls = $this->db->table(self::TABLE)->whereIn('name', $batch)->pluck('url', 'name')->all();
+            $used = array_flip($this->db->table('tier_list_items')->whereIn('image', array_values($urls))->pluck('image')->unique()->all());
+
+            foreach ($urls as $name => $url) {
+                if (isset($used[$url])) {
+                    continue;
+                }
+
+                $file = \FoF\Upload\File::query()->where('uuid', substr($name, strlen(self::FOF)))->first();
+                $elsewhere = $file && ($file->shared || $this->db->table('fof_upload_file_posts')->where('file_id', $file->id)->exists());
+
+                if ($file && ! $elsewhere && $this->deleteFofFile($file)) {
+                    $deleted++;
+                }
+                $this->db->table(self::TABLE)->where('name', $name)->delete();
+            }
+        }
+
+        return $deleted;
+    }
+
+    private function deleteFofFile(\FoF\Upload\File $file): bool
+    {
+        // FoF Upload's own command, as an administrator: the cleanup is the
+        // forum's, not the member's, and they may not hold the delete permission.
+        $admin = User::query()->whereHas('groups', fn ($q) => $q->where('groups.id', Group::ADMINISTRATOR_ID))->orderBy('users.id')->first();
+
+        try {
+            resolve(\Illuminate\Contracts\Bus\Dispatcher::class)->dispatch(new \FoF\Upload\Commands\DeleteFile($file, $admin ?? new User()));
+
+            return true;
+        } catch (\Throwable $e) {
+            resolve(\Psr\Log\LoggerInterface::class)->info('[tier-lists] FoF Upload file '.$file->uuid.' not deleted: '.$e->getMessage());
+
+            return false;
+        }
+    }
+
+    private function fofEnabled(): bool
+    {
+        return $this->extensions->isEnabled('fof-upload');
+    }
+
+    /**
+     * A safety net for our pictures marked used that no item shows any more
+     * (rows removed outside the extension). A slice per run, from a cursor kept
+     * in the cache; losing the cursor only starts the sweep over.
      */
     public function pruneOrphans(\Illuminate\Contracts\Cache\Repository $cache, int $limit = 500): int
     {
         $after = (int) $cache->get('tier-lists.prune-cursor', 0);
-        $rows = $this->db->table(self::TABLE)->where('claimed', true)->where('id', '>', $after)->orderBy('id')->limit($limit)->get(['id', 'name']);
+        $rows = $this->db->table(self::TABLE)->where('claimed', true)->whereNull('url')->where('id', '>', $after)->orderBy('id')->limit($limit)->get(['id', 'name']);
         $cache->forever('tier-lists.prune-cursor', $rows->count() < $limit ? 0 : (int) $rows->last()->id);
 
         return $rows->isEmpty() ? 0 : $this->prune($rows->pluck('name')->all());
@@ -234,7 +364,7 @@ class Images
 
     /**
      * Uploads past their grace period that no list shows (an editor closed
-     * without saving). Bounded per run.
+     * without saving), ours and FoF Upload's. Bounded per run.
      */
     public function pruneAbandoned(?int $userId = null, int $limit = 200): int
     {

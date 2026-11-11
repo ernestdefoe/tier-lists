@@ -39,7 +39,7 @@ class DeleteController implements RequestHandlerInterface
         $list->items()->delete();
         $list->delete();
 
-        $this->images->release($pictures);
+        $this->images->release($pictures, $list->user_id);
         if ($root) {
             TierList::query()->where('id', $root)->update(['remixes_count' => TierList::query()->where('root_id', $root)->count()]);
         }

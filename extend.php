@@ -21,12 +21,13 @@ use ErnestDefoe\TierLists\Http;
 use ErnestDefoe\TierLists\Images;
 use ErnestDefoe\TierLists\Notification\LikedBlueprint;
 use ErnestDefoe\TierLists\Notification\RemixedBlueprint;
-use ErnestDefoe\TierLists\Settings;
 use ErnestDefoe\TierLists\TierListsServiceProvider;
 use Flarum\Api\Context;
 use Flarum\Api\Resource\ForumResource;
 use Flarum\Api\Schema;
 use Flarum\Extend;
+use Flarum\Foundation\Paths;
+use Flarum\Http\UrlGenerator;
 use Flarum\Gdpr\Extend\UserData;
 use Illuminate\Console\Scheduling\Event as ScheduledEvent;
 
@@ -51,13 +52,16 @@ return [
         ->namespace('ernestdefoe-tier-lists', __DIR__.'/views'),
 
     (new Extend\Filesystem())
-        ->disk(Images::DISK, Images::config(...)),
+        // A literal and a closure: reading Images here would autoload it while extend.php loads.
+        ->disk('ernestdefoe-tier-lists', fn (Paths $paths, UrlGenerator $url) => Images::config($paths, $url)),
 
     (new Extend\Routes('api'))
         ->get('/tier-lists', 'tier-lists.index', Api\ListController::class)
         ->post('/tier-lists', 'tier-lists.create', Api\SaveController::class)
         ->get('/tier-lists/abilities', 'tier-lists.abilities', Api\AbilitiesController::class)
         ->post('/tier-lists/images', 'tier-lists.images', Api\UploadController::class)
+        ->post('/tier-lists/images/track', 'tier-lists.images.track', Api\ImageController::class)
+        ->delete('/tier-lists/images', 'tier-lists.images.forget', Api\ImageController::class)
         ->get('/tier-lists/{id:\d+}', 'tier-lists.read', Api\ShowController::class)
         ->patch('/tier-lists/{id:\d+}', 'tier-lists.update', Api\SaveController::class)
         ->delete('/tier-lists/{id:\d+}', 'tier-lists.delete', Api\DeleteController::class)
@@ -82,8 +86,11 @@ return [
         ]),
 
     (new Extend\Settings())
-        ->default(Settings::NAV, true)
-        ->serializeToForum('tierListsNav', Settings::NAV, 'boolval'),
+        // String literals, not Settings constants: extend.php must not autoload our classes while it loads.
+        ->default('ernestdefoe-tier-lists.nav', true)
+        ->default('ernestdefoe-tier-lists.max_items', 200)
+        ->serializeToForum('tierListsNav', 'ernestdefoe-tier-lists.nav', 'boolval')
+        ->serializeToForum('tierListsMaxItems', 'ernestdefoe-tier-lists.max_items', fn ($value) => min(max((int) $value ?: 200, 1), 500)),
 
     (new Extend\Console())
         ->command(PruneImagesCommand::class)

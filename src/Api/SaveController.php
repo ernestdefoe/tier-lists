@@ -13,6 +13,7 @@ use ErnestDefoe\TierLists\TierList;
 use Flarum\Discussion\Discussion;
 use Flarum\Http\RequestUtil;
 use Flarum\Notification\NotificationSyncer;
+use Flarum\Settings\SettingsRepositoryInterface;
 use Flarum\User\User;
 use Illuminate\Database\ConnectionInterface;
 use Illuminate\Support\Arr;
@@ -45,6 +46,7 @@ class SaveController implements RequestHandlerInterface
         private readonly RateLimit $limit,
         private readonly NotificationSyncer $notifications,
         private readonly ConnectionInterface $db,
+        private readonly SettingsRepositoryInterface $settings,
     ) {
     }
 
@@ -142,7 +144,7 @@ class SaveController implements RequestHandlerInterface
         $after = array_values(array_filter(array_column($items, 'image')));
         $this->images->claim($after);
         if ($gone = array_values(array_diff($before, $after))) {
-            $this->images->release($gone);
+            $this->images->release($gone, $list->user_id);
         }
 
         if ($wasNew && $root) {
@@ -190,7 +192,7 @@ class SaveController implements RequestHandlerInterface
         if (! is_array($raw) || count($raw) < 1) {
             return 'tier_lists_no_items';
         }
-        if (count($raw) > Settings::MAX_ITEMS) {
+        if (count($raw) > Settings::maxItems($this->settings)) {
             return 'tier_lists_too_many_items';
         }
 
